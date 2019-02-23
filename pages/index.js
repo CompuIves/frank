@@ -7,7 +7,7 @@ import "../styles/global.css";
 import { BLOCK_SIZE } from "../utils/constants";
 import Block from "../components/Block";
 
-import "../static/seedrandom.js";
+import "../utils/seedrandom.js";
 
 const WALL_HEIGHT = BLOCK_SIZE() * 10;
 
