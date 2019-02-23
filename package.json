@@ -10,6 +10,7 @@
     "@zeit/next-css": "1.0.1",
     "confetti-js": "0.0.14",
     "next": "latest",
+    "pubnub": "4.21.7",
     "react": "16.8.3",
     "react-dom": "16.8.3"
   },

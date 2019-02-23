@@ -1,6 +1,7 @@
 import React from "react";
 import Link from "next/link";
 import Head from "next/head";
+import PubNub from "pubnub";
 
 import "../styles/global.css";
 import { BLOCK_SIZE } from "../utils/constants";
@@ -12,6 +13,10 @@ const BLOCK_WIDTH = 5;
 const BLOCK_HEIGHT = 10;
 const FRANK_OFFSET = 2;
 const TOTAL_BOOSTS = BLOCK_HEIGHT / 5;
+
+Math.seedrandom(`frank${Math.floor(Date.now() / (1000 * 60))}`);
+
+const MY_ID = Math.floor(Math.random() * 10000);
 
 const generateString = () =>
   Math.random()
@@ -37,19 +42,34 @@ const generateBoosts = () => {
 
 const getDistance = (a, b) => (b > a ? b - a : a - b);
 
+const INITIAL_STATE = {
+  top: -WALL_HEIGHT,
+  frankY: 0,
+  frankX: 1,
+  otherFranks: [],
+  frankPicture: 1,
+  chars: generateString(),
+  nextChars: generateString(),
+  timer: null,
+  boosts: generateBoosts(),
+  finished: false,
+  notification: null,
+  history: []
+};
+
 export default class Game extends React.PureComponent {
   lastRender = 0;
 
-  state = {
-    top: -WALL_HEIGHT,
-    frankY: 0,
-    frankX: 1,
-    frankPicture: 1,
-    chars: generateString(),
-    nextChars: generateString(),
-    timer: null,
-    boosts: generateBoosts(),
-    finished: false
+  state = INITIAL_STATE;
+
+  showNotification = msg => {
+    this.setState({ notification: msg });
+
+    clearTimeout(this.notificationTimeout);
+
+    this.notificationTimeout = setTimeout(() => {
+      this.setState({ notification: null });
+    }, 5000);
   };
 
   componentDidMount() {
@@ -60,6 +80,83 @@ export default class Game extends React.PureComponent {
     this.update();
 
     this.registerKeyListeners();
+
+    const pubnub = new PubNub({
+      publishKey: "pub-c-3f722022-dbf9-408b-b5a1-5884f28b6f77",
+      subscribeKey: "sub-c-b0160ba0-3793-11e9-b5cf-1e59042875b2"
+    });
+
+    this.pubnub = pubnub;
+
+    const publishSampleMessage = () => {
+      const publishConfig = {
+        channel: "hello_world",
+        message: {
+          type: "join",
+          sender: MY_ID,
+          x: this.state.frankX,
+          y: this.state.frankY
+        }
+      };
+      pubnub.publish(publishConfig, function(status, response) {
+        console.log(status, response);
+      });
+    };
+
+    pubnub.addListener({
+      status: function(statusEvent) {
+        if (statusEvent.category === "PNConnectedCategory") {
+          publishSampleMessage();
+        }
+      },
+      message: msg => {
+        if (msg.message.sender !== MY_ID) {
+          if (msg.message.type === "frankPos") {
+            this.setState({
+              otherFranks: {
+                ...this.state.otherFranks,
+                [msg.message.sender]: {
+                  x: msg.message.x,
+                  y: msg.message.y
+                }
+              }
+            });
+          } else if (msg.message.type === "join") {
+            this.showNotification(
+              `Frank ${msg.message.sender} joined the game!`
+            );
+
+            this.setState({
+              otherFranks: {
+                ...this.state.otherFranks,
+                [msg.message.sender]: {
+                  x: msg.message.x,
+                  y: msg.message.y
+                }
+              }
+            });
+
+            this.pubnub.publish({
+              channel: "hello_world",
+              message: {
+                type: "frankPos",
+                x: this.state.frankX,
+                y: this.state.frankY,
+                sender: MY_ID
+              }
+            });
+          }
+        }
+      },
+      presence: presenceEvent => {
+        // handle presence
+      }
+    });
+
+    pubnub.subscribe({
+      channels: ["hello_world"]
+    });
+    window.pubnub = pubnub;
   }
 
   componentWillUnmount() {
@@ -137,6 +234,19 @@ export default class Game extends React.PureComponent {
         });
       }
 
+      var publishConfig = {
+        channel: "hello_world",
+        message: {
+          type: "frankPos",
+          x: newState.frankX,
+          y: newState.frankY,
+          sender: MY_ID
+        }
+      };
+      this.pubnub.publish(publishConfig, function(status, response) {
+        console.log(status, response);
+      });
+
       this.setState(newState);
     } else if (this.state.frankY > 0) {
       this.setState({ frankY: this.state.frankY - 1, chars: generateString() });
@@ -153,6 +263,7 @@ export default class Game extends React.PureComponent {
             href="https://fonts.googleapis.com/css?family=Patrick+Hand+SC|VT323"
             rel="stylesheet"
           />
+          <script src="/static/seedrandom.js" />
         </Head>
 
         {this.state.finished && (
@@ -176,6 +287,21 @@ export default class Game extends React.PureComponent {
         <div
           style={{
             position: "fixed",
+            bottom: 100,
+            right: 100,
+            fontSize: "3rem",
+            fontFamily: "VT323",
+            fontFeatureSettings: "tnum",
+            fontVariantNumeric: "tabular-nums",
+            zIndex: 300
+          }}
+        >
+          {this.state.notification}
+        </div>
+
+        <div
+          style={{
+            position: "fixed",
             top: 100,
             right: 100,
             fontSize: "6rem",
@@ -186,6 +312,7 @@ export default class Game extends React.PureComponent {
         >
           {this.state.timer && (this.state.timer / 1000).toFixed(2)}
         </div>
+
         <div
           style={{
             transform: `translateY(${BLOCK_SIZE() * this.state.frankY}px)`,
@@ -220,6 +347,25 @@ export default class Game extends React.PureComponent {
                       justifyContent: "center"
                     }}
                   >
+                    {Object.keys(this.state.otherFranks).map(
+                      f =>
+                        i === this.state.otherFranks[f].y &&
+                        j - 1 === this.state.otherFranks[f].x && (
+                          <img
+                            src={`/static/frank${this.state.frankPicture}.png`}
+                            style={{
+                              position: "absolute",
+
+                              height: BLOCK_SIZE(),
+                              borderRadius: "100%",
+                              zIndex: 100,
+                              filter:
+                                "sepia(100%) hue-rotate(190deg) saturate(500%)"
+                            }}
+                          />
+                        )
+                    )}
+
                     {i === this.state.frankY && j - 1 === this.state.frankX && (
                       <img
                         src={`/static/frank${this.state.frankPicture}.png`}
