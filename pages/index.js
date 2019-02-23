@@ -54,7 +54,12 @@ const INITIAL_STATE = {
   boosts: generateBoosts(),
   finished: false,
   notification: null,
-  history: []
+  history: [],
+  ghostFrank: {
+    x: -1,
+    y: -1
+  },
+  bonus: 0
 };
 
 export default class Game extends React.PureComponent {
@@ -178,18 +183,40 @@ export default class Game extends React.PureComponent {
 
     this.lastRender = time;
 
-    if (this.state.timer === null && !this.state.finished) {
-      requestAnimationFrame(this.update);
-    } else {
-      this.setState(
-        c => ({
-          timer: c.timer + delta
-        }),
-        () => {
-          requestAnimationFrame(this.update);
-        }
-      );
+    const newState = {};
+
+    if (this.state.timer !== null && !this.state.finished) {
+      newState.timer = this.state.timer + delta;
     }
+
+    const previousHistory = JSON.parse(localStorage.getItem("ghost"));
+
+    let currentCoordinate = null;
+    if (previousHistory) {
+      for (let i = 0; i < previousHistory.history.length; i++) {
+        if (previousHistory.history[i]) {
+          if (this.state.timer > previousHistory.history[i].time) {
+            if (
+              !previousHistory.history[i + 1] ||
+              previousHistory.history[i + 1].time > this.state.timer
+            ) {
+              currentCoordinate = {
+                x: previousHistory.history[i].frankX,
+                y: previousHistory.history[i].frankY
+              };
+            }
+          }
+        }
+      }
+    }
+
+    if (currentCoordinate) {
+      newState.ghostFrank = currentCoordinate;
+    }
+
+    this.setState(newState, () => {
+      requestAnimationFrame(this.update);
+    });
   };
 
   handleKeyDown = e => {
@@ -204,12 +231,20 @@ export default class Game extends React.PureComponent {
       location < 3 &&
       getDistance(location, this.state.frankX) < 2
     ) {
+      const frankY = this.state.frankY + 1;
+      const frankX = location;
+      const history = [
+        ...this.state.history,
+        { time: this.state.timer || 0, frankX, frankY }
+      ];
+
       const newState = {
-        frankY: this.state.frankY + 1,
-        frankX: location,
+        frankY,
+        frankX,
         frankPicture: Math.floor(Math.random() * 5),
         nextChars: generateString(),
-        chars: this.state.nextChars
+        chars: this.state.nextChars,
+        history
       };
 
       if (this.state.timer === null) {
@@ -220,12 +255,23 @@ export default class Game extends React.PureComponent {
         this.state.boosts[this.state.frankY + 1] !== undefined &&
         this.state.boosts[this.state.frankY + 1] === location
       ) {
-        newState.timer = this.state.timer - 1000;
+        newState.bonus = this.state.bonus + 1000;
       }
 
       if (BLOCK_HEIGHT - 1 === this.state.frankY + 1) {
+        // WINNER WINNER CHICKEN DINNER
+        const winnerTime = this.state.timer - this.state.bonus;
+
+        const previousHistory = JSON.parse(localStorage.getItem("ghost"));
+
+        if (!previousHistory || previousHistory.time > winnerTime) {
+          localStorage.setItem(
+            "ghost",
+            JSON.stringify({ time: winnerTime, history })
+          );
+        }
+
         newState.finished = true;
-        this.update = () => {};
 
         import("confetti-js").then(x => {
           var confettiSettings = { target: "confetti" };
@@ -249,7 +295,18 @@ export default class Game extends React.PureComponent {
 
       this.setState(newState);
     } else if (this.state.frankY > 0) {
-      this.setState({ frankY: this.state.frankY - 1, chars: generateString() });
+      this.setState({
+        frankY: this.state.frankY - 1,
+        chars: generateString(),
+        history: [
+          ...this.state.history,
+          {
+            time: this.state.timer || 0,
+            frankX: this.state.frankX,
+            frankY: this.state.frankY - 1
+          }
+        ]
+      });
     }
   };
 
@@ -267,20 +324,28 @@ export default class Game extends React.PureComponent {
         </Head>
 
         {this.state.finished && (
-          <div
-            style={{
-              position: "fixed",
-              top: 150,
-              left: 0,
-              right: 0,
-              textAlign: "center",
-              fontSize: "12rem",
-              fontFamily: "VT323",
-              fontFeatureSettings: "tnum",
-              fontVariantNumeric: "tabular-nums"
-            }}
-          >
-            WINNER
+          <div>
+            <div
+              style={{
+                position: "fixed",
+                top: 150,
+                left: 0,
+                right: 0,
+                textAlign: "center",
+                fontSize: "12rem",
+                fontFamily: "VT323",
+                fontFeatureSettings: "tnum",
+                fontVariantNumeric: "tabular-nums"
+              }}
+            >
+              WINNER
+              <p
+                style={{ fontSize: "6rem", cursor: "pointer", marginTop: 0 }}
+                onClick={() => this.setState(INITIAL_STATE)}
+              >
+                Play Again
+              </p>
+            </div>
           </div>
         )}
 
@@ -310,7 +375,8 @@ export default class Game extends React.PureComponent {
             fontVariantNumeric: "tabular-nums"
           }}
         >
-          {this.state.timer && (this.state.timer / 1000).toFixed(2)}
+          {this.state.timer &&
+            ((this.state.timer - this.state.bonus) / 1000).toFixed(2)}
         </div>
 
         <div
@@ -347,6 +413,23 @@ export default class Game extends React.PureComponent {
                       justifyContent: "center"
                     }}
                   >
+                    {i === this.state.ghostFrank.y &&
+                      j - 1 === this.state.ghostFrank.x && (
+                        <img
+                          src={`/static/frank${this.state.frankPicture}.png`}
+                          style={{
+                            position: "absolute",
+
+                            height: BLOCK_SIZE(),
+                            borderRadius: "100%",
+                            zIndex: 100,
+                            opacity: 0.5,
+                            filter:
+                              "sepia(100%) hue-rotate(190deg) grayscale(100%)"
+                          }}
+                        />
+                      )}
+
                     {Object.keys(this.state.otherFranks).map(
                       f =>
                         i === this.state.otherFranks[f].y &&
@@ -386,7 +469,6 @@ export default class Game extends React.PureComponent {
                           src={`/static/club_mate.png`}
                           style={{
                             position: "absolute",
-
                             height: BLOCK_SIZE() / 2,
                             borderRadius: "100%",
                             zIndex: 100
